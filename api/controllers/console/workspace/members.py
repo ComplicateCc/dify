@@ -88,20 +88,35 @@ class MemberCancelInviteApi(Resource):
     @login_required
     @account_initialization_required
     def delete(self, member_id):
+        # 验证当前用户是否有权限删除成员
+        if not current_user.is_admin_or_owner:
+            return {"code": "forbidden", "message": "You don't have permission to remove members."}, 403
+            
         member = db.session.query(Account).filter(Account.id == str(member_id)).first()
         if member is None:
             abort(404)
-        else:
-            try:
-                TenantService.remove_member_from_tenant(current_user.current_tenant, member, current_user)
-            except services.errors.account.CannotOperateSelfError as e:
-                return {"code": "cannot-operate-self", "message": str(e)}, 400
-            except services.errors.account.NoPermissionError as e:
-                return {"code": "forbidden", "message": str(e)}, 403
-            except services.errors.account.MemberNotInTenantError as e:
-                return {"code": "member-not-found", "message": str(e)}, 404
-            except Exception as e:
-                raise ValueError(str(e))
+
+        # 获取目标成员的角色
+        member_role = TenantService.get_user_role(current_user.current_tenant, member)
+        
+        # 验证权限规则
+        # 1. 管理员不能删除管理员
+        if current_user.is_admin and TenantAccountRole.is_admin_role(member_role):
+            return {"code": "forbidden", "message": "Admin cannot remove another admin."}, 403
+        # 2. 只有Owner才能删除管理员
+        if TenantAccountRole.is_admin_role(member_role) and not current_user.current_role == TenantAccountRole.OWNER:
+            return {"code": "forbidden", "message": "Only owner can remove admin members."}, 403
+            
+        try:
+            TenantService.remove_member_from_tenant(current_user.current_tenant, member, current_user)
+        except services.errors.account.CannotOperateSelfError as e:
+            return {"code": "cannot-operate-self", "message": str(e)}, 400
+        except services.errors.account.NoPermissionError as e:
+            return {"code": "forbidden", "message": str(e)}, 403
+        except services.errors.account.MemberNotInTenantError as e:
+            return {"code": "member-not-found", "message": str(e)}, 404
+        except Exception as e:
+            raise ValueError(str(e))
 
         return {"result": "success"}, 204
 
